@@ -14,7 +14,7 @@ take_photos = False
 gopro_is_ready = False
 
 # =================================================================
-# SIMULATED GOPRO IMPLEMENTATION
+# SIMULATED GOPRO
 # =================================================================
 
 class MockHttpCommand:
