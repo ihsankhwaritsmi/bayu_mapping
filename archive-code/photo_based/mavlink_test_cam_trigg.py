@@ -27,10 +27,11 @@ try:
     while True:
         # Wait for a STATUSTEXT message
         msg = master.recv_match(type='STATUSTEXT', blocking=True)
+        
         if not msg:
             continue
 
-        # print(msg)
+        print(msg)
 
         # Convert the message text to a string
         message_text = msg.text.strip()
@@ -51,7 +52,7 @@ try:
                 # Fallback if the format is slightly different
                 print(f"📸 Camera Trigger Command Detected: '{message_text}'")
             
-            print("   NOTE: The trigger parameters (e.g., distance) are not in this message.")
+            # print("   NOTE: The trigger parameters (e.g., distance) are not in this message.")
             print("="*50)
 
 
