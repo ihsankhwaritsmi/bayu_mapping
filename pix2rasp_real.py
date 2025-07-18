@@ -93,7 +93,7 @@ async def gopro_controller(args: argparse.Namespace, output_dir: Path):
                         )
                         console.print(f"✅ Success! File downloaded to {output_file.absolute()}")
 
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(2)
                     else:
                         await asyncio.sleep(0.5)
 
