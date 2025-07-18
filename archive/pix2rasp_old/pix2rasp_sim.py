@@ -163,6 +163,7 @@ async def mavlink_listener(connection_string: str):
 async def main():
     """Main function to run MAVLink listener and GoPro controller concurrently."""
     # --- Configuration ---
+
     connection_string = 'tcp:127.0.0.1:5762'
     
     output_dir = Path("gopro_captures")
