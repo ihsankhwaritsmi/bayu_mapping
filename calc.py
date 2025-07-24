@@ -1,7 +1,7 @@
 import os
 
-folder_path = "server/datasets/project/images" 
-# folder_path = "client/gopro_captures" 
+# folder_path = "server/datasets/project/images" 
+folder_path = "client/gopro_captures" 
 
 
 # Count only files ending with .jpg or .JPG

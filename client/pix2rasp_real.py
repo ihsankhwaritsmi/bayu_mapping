@@ -93,7 +93,7 @@ async def gopro_controller(args: argparse.Namespace, output_dir: Path):
                         )
                         console.print(f"✅ Success! File downloaded to {output_file.absolute()}")
 
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1)
                     else:
                         await asyncio.sleep(0.5)
 
@@ -170,8 +170,8 @@ async def main(args: argparse.Namespace):
     console.print(f"📸 Photos will be saved to: {output_dir.absolute()}")
 
     # --- MAVLink Configuration ---
-    # connection_string = "tcp:127.0.0.1:5762"
-    connection_string = "/dev/ttyAMA0:57600"
+    connection_string = "tcp:127.0.0.1:5762"
+    # connection_string = "/dev/ttyAMA0:57600"
 
     try:
         await asyncio.gather(

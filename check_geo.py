@@ -44,7 +44,9 @@ if __name__ == "__main__":
     # --- HOW TO USE ---
     # 1. Place your image in the same directory as this script.
     # 2. Change the file name below to match your image file.
-    image_filename = "server\datasets\project\images\image_20250719_164911_546069.JPG" # <--- CHANGE THIS
+    # image_filename = "\video_mapping_demo_mapper_87_367.jpg" # <--- CHANGE THIS
+    image_filename = "GOPR0189.JPG" # <--- CHANGE THIS
+    # image_filename = "DJI_0620.JPG"
 
     if not os.path.exists(image_filename):
          print(f"❌ The file '{image_filename}' does not exist in this directory.")
