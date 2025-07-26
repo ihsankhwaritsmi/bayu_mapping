@@ -48,11 +48,35 @@ def handle_client(conn, addr):
         conn.close()
         console.print(f"Connection with {addr} closed.")
 
+def monitor_flag_files():
+    """Continuously monitors the UPLOAD_DIR for flag files."""
+    flag_detected = False
+    while True:
+        flag_files = glob.glob(os.path.join(UPLOAD_DIR, '*.flag'))
+        if flag_files and not flag_detected:
+            console.print("[bold green]Ready to make an orthophoto[/bold green]")
+            flag_detected = True
+            # Delete the flag files after printing the message
+            for flag_file in flag_files:
+                try:
+                    os.remove(flag_file)
+                    console.print(f"Deleted flag file: {flag_file}")
+                except OSError as e:
+                    console.print(f"Error deleting flag file {flag_file}: {e}")
+        elif not flag_files and flag_detected:
+            flag_detected = False # Reset if flag files are removed
+        time.sleep(1) # Prevent busy-waiting
+
 def start_server():
     """Starts the server and listens for incoming connections."""
     if not os.path.exists(UPLOAD_DIR):
         os.makedirs(UPLOAD_DIR)
         console.print(f"Created upload directory: {UPLOAD_DIR}")
+
+    # Start the flag monitoring thread
+    flag_monitor_thread = threading.Thread(target=monitor_flag_files, daemon=True)
+    flag_monitor_thread.start()
+    console.print("Flag file monitor started.")
 
     # The 'with' statement ensures the socket is properly closed
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -62,7 +86,6 @@ def start_server():
         console.print(f"Server listening on {HOST}:{PORT}")
         console.print("Press Ctrl+C to stop the server.")
 
-        flag_detected = False
         try:
             while True:
                 conn, addr = s.accept()
@@ -70,23 +93,6 @@ def start_server():
                 # Set as a daemon thread so it exits when the main program does
                 thread.daemon = True
                 thread.start()
-
-                # Check for flag files
-                flag_files = glob.glob(os.path.join(UPLOAD_DIR, '*.flag'))
-                if flag_files and not flag_detected:
-                    console.print("[bold green]Ready to make an orthophoto[/bold green]")
-                    flag_detected = True
-                    # Delete the flag files after printing the message
-                    for flag_file in flag_files:
-                        try:
-                            os.remove(flag_file)
-                            console.print(f"Deleted flag file: {flag_file}")
-                        except OSError as e:
-                            console.print(f"Error deleting flag file {flag_file}: {e}")
-                elif not flag_files and flag_detected:
-                    flag_detected = False # Reset if flag files are removed
-
-                time.sleep(1) # Prevent busy-waiting
         except KeyboardInterrupt:
             console.print("\nShutting down server...")
         finally:
