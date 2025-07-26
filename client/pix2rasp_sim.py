@@ -9,6 +9,20 @@ from rich.console import Console
 
 console = Console()
 
+FLAG_FILE_EXTENSION = "flag"
+
+async def create_flag_file(output_dir: Path):
+    """Create a flag file to indicate mission completion."""
+    # Create a unique flag file name with the .flag extension
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    flag_file_name = f"mission_completed_{timestamp}.{FLAG_FILE_EXTENSION}"
+    flag_file_path = output_dir / flag_file_name
+    try:
+        flag_file_path.touch()
+        console.print(f"[bold green]Created flag file: {flag_file_path.absolute()}[/bold green]")
+    except Exception as e:
+        console.print(f"[bold red]Failed to create flag file: {repr(e)}[/bold red]")
+
 # --- Shared state variable to control the photo-taking loop ---
 take_photos = False
 gopro_is_ready = False
@@ -115,7 +129,7 @@ async def gopro_controller(output_dir: Path):
             gopro_is_ready = False
             await asyncio.sleep(10)
 
-async def mavlink_listener(connection_string: str):
+async def mavlink_listener(connection_string: str, output_dir):
     """Listens for MAVLink messages and toggles the photo-taking state."""
     global take_photos, gopro_is_ready
 
@@ -142,6 +156,7 @@ async def mavlink_listener(connection_string: str):
                             take_photos = False
                             console.print(f"\n\n{'='*50}\n⏹️⏹️⏹️ [bold blue]STOPPING[/bold blue] Photo Capture due to DigiCamCtrl command.\n{'='*50}\n")
                         console.print(f"\n\n{'='*50}\n🎉 [bold magenta]Mission Complete: 'DigiCamCtrl' detected.[/bold magenta]\n{'='*50}\n")
+                        await create_flag_file(output_dir) # Call to create flag file
                     elif "SetCamTrigDst" in message_text:
                         if not gopro_is_ready:
                             console.print("[yellow]MAVLink trigger detected, but GoPro is not ready.[/yellow]")
@@ -171,7 +186,7 @@ async def main():
 
     try:
         await asyncio.gather(
-            mavlink_listener(connection_string),
+            mavlink_listener(connection_string, output_dir),
             gopro_controller(output_dir),
         )
     except KeyboardInterrupt:

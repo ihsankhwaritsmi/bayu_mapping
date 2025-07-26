@@ -9,12 +9,15 @@ from watchdog.events import FileSystemEventHandler
 HOST = '127.0.0.1'  # The server's hostname or IP address
 PORT = 65432        # The port used by the server
 GOPRO_CAPTURES_DIR = 'gopro_captures'
+FLAG_FILE_EXTENSION = "flag"
 
 def uploader_worker(upload_queue):
     """
     Pulls filepaths from a queue and sends them to the server.
     Retries indefinitely on connection failure.
     """
+    # Add a small delay to ensure the server is ready to receive
+    time.sleep(2)
     while True:
         filepath = upload_queue.get()
         if filepath is None:  # Sentinel value to signal thread termination
@@ -71,6 +74,9 @@ class ImageHandler(FileSystemEventHandler):
             file_ext = filename.split('.')[-1].lower()
             if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
                 print(f"📥 Detected new image, adding to queue: {filename}")
+                self.upload_queue.put(filepath)
+            elif file_ext == FLAG_FILE_EXTENSION:
+                print(f"🚩 Detected mission completion flag, adding to queue: {filename}")
                 self.upload_queue.put(filepath)
 
 
