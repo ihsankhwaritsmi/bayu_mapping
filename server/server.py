@@ -4,11 +4,15 @@ import os
 import datetime
 import glob
 import time
+import subprocess # Import the subprocess module
 from rich.console import Console
 
 HOST = '127.0.0.1'  # Standard loopback interface address (localhost)
 PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
-UPLOAD_DIR = 'datasets/project/images'
+# Get the directory where the script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'images')
+MAPPING_SCRIPT_PATH = os.path.join(SCRIPT_DIR, 'mapping_script.sh')
 
 console = Console()
 
@@ -56,7 +60,29 @@ def monitor_flag_files():
         if flag_files and not flag_detected:
             console.print("[bold green]Ready to make an orthophoto[/bold green]")
             flag_detected = True
-            # Delete the flag files after printing the message
+            # Execute the mapping script
+            console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
+            try:
+                # Use subprocess.run to execute the shell script
+                # capture_output=True to capture stdout/stderr, text=True for string output
+                result = subprocess.run([MAPPING_SCRIPT_PATH], capture_output=True, text=True, check=True)
+                console.print("[bold green]Mapping script executed successfully![/bold green]")
+                if result.stdout:
+                    console.print(f"Script Output:\n{result.stdout}")
+                if result.stderr:
+                    console.print(f"Script Errors:\n{result.stderr}")
+            except subprocess.CalledProcessError as e:
+                console.print(f"[bold red]Error executing mapping script: {e}[/bold red]")
+                console.print(f"Command: {e.cmd}")
+                console.print(f"Return Code: {e.returncode}")
+                console.print(f"Output: {e.stdout}")
+                console.print(f"Error Output: {e.stderr}")
+            except FileNotFoundError:
+                console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
+            except Exception as e:
+                console.print(f"[bold red]An unexpected error occurred while running the mapping script: {e}[/bold red]")
+
+            # Delete the flag files after attempting to run the script
             for flag_file in flag_files:
                 try:
                     os.remove(flag_file)
