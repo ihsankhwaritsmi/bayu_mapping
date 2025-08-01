@@ -64,19 +64,30 @@ def monitor_flag_files():
             console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
             try:
                 # Use subprocess.run to execute the shell script
-                # capture_output=True to capture stdout/stderr, text=True for string output
-                result = subprocess.run([MAPPING_SCRIPT_PATH], capture_output=True, text=True, check=True)
-                console.print("[bold green]Mapping script executed successfully![/bold green]")
-                if result.stdout:
-                    console.print(f"Script Output:\n{result.stdout}")
-                if result.stderr:
-                    console.print(f"Script Errors:\n{result.stderr}")
-            except subprocess.CalledProcessError as e:
-                console.print(f"[bold red]Error executing mapping script: {e}[/bold red]")
-                console.print(f"Command: {e.cmd}")
-                console.print(f"Return Code: {e.returncode}")
-                console.print(f"Output: {e.stdout}")
-                console.print(f"Error Output: {e.stderr}")
+                # Use subprocess.Popen to stream output in real-time
+                process = subprocess.Popen(
+                    [MAPPING_SCRIPT_PATH],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True, # Decode stdout/stderr as text
+                    bufsize=1 # Line-buffered output
+                )
+
+                # Stream stdout
+                for line in process.stdout:
+                    console.print(f"[blue]SCRIPT OUT:[/blue] {line.strip()}")
+                # Stream stderr
+                for line in process.stderr:
+                    console.print(f"[red]SCRIPT ERR:[/red] {line.strip()}")
+
+                # Wait for the process to complete and get the return code
+                process.wait()
+
+                if process.returncode == 0:
+                    console.print("[bold green]Mapping script executed successfully![/bold green]")
+                else:
+                    console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
+
             except FileNotFoundError:
                 console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
             except Exception as e:
