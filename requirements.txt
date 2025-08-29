@@ -2,3 +2,5 @@ rich
 pymavlink
 open_gopro
 watchdog
+Flask
+Flask-Cors
