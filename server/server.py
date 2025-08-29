@@ -22,6 +22,7 @@ console = Console()
 def handle_client(conn, addr):
     """Handles an individual client connection."""
     console.print(f"Connected by {addr}")
+    conn.settimeout(10) # Set a timeout for client connection operations
     try:
         # Receive file extension first
         file_ext_len_bytes = conn.recv(4)
@@ -93,12 +94,12 @@ def monitor_flag_files():
                     original_orthophoto_path = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'odm_orthophoto', 'odm_orthophoto.original.tif')
 
                     if os.path.exists(orthophoto_path):
-                        send_file_to_gcs(orthophoto_path)
+                        send_file_to_gcs(orthophoto_path, max_retries=3, retry_delay=5)
                     else:
                         console.print(f"[bold yellow]Warning: {orthophoto_path} not found. Skipping transfer.[/bold yellow]")
 
                     if os.path.exists(original_orthophoto_path):
-                        send_file_to_gcs(original_orthophoto_path)
+                        send_file_to_gcs(original_orthophoto_path, max_retries=3, retry_delay=5)
                     else:
                         console.print(f"[bold yellow]Warning: {original_orthophoto_path} not found. Skipping transfer.[/bold yellow]")
 
@@ -124,32 +125,45 @@ def monitor_flag_files():
             flag_detected = False # Reset if flag files are removed
         time.sleep(1) # Prevent busy-waiting
 
-def send_file_to_gcs(filepath):
-    """Sends a file to the GCS receiver."""
+def send_file_to_gcs(filepath, max_retries=3, retry_delay=5):
+    """Sends a file to the GCS receiver with retry mechanism."""
     filename = os.path.basename(filepath)
-    console.print(f"Attempting to send {filename} to GCS at {GCS_HOST}:{GCS_PORT}")
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect((GCS_HOST, GCS_PORT))
-            # Send file name length and then file name
-            file_name_bytes = filename.encode('utf-8')
-            s.sendall(len(file_name_bytes).to_bytes(4, 'big'))
-            s.sendall(file_name_bytes)
+    attempts = 0
+    while attempts < max_retries:
+        console.print(f"Attempt {attempts + 1}/{max_retries}: Sending {filename} to GCS at {GCS_HOST}:{GCS_PORT}")
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(10) # Set a timeout for GCS socket operations
+                s.connect((GCS_HOST, GCS_PORT))
+                # Send file name length and then file name
+                file_name_bytes = filename.encode('utf-8')
+                s.sendall(len(file_name_bytes).to_bytes(4, 'big'))
+                s.sendall(file_name_bytes)
 
-            # Send file content
-            with open(filepath, 'rb') as f:
-                while True:
-                    bytes_read = f.read(4096)
-                    if not bytes_read:
-                        break
-                    s.sendall(bytes_read)
-        console.print(f"[bold green]Successfully sent {filename} to GCS.[/bold green]")
-    except ConnectionRefusedError:
-        console.print(f"[bold red]Error: GCS receiver not running or connection refused at {GCS_HOST}:{GCS_PORT}.[/bold red]")
-    except FileNotFoundError:
-        console.print(f"[bold red]Error: File not found at {filepath}.[/bold red]")
-    except Exception as e:
-        console.print(f"[bold red]Error sending {filename} to GCS: {e}[/bold red]")
+                # Send file content
+                with open(filepath, 'rb') as f:
+                    while True:
+                        bytes_read = f.read(4096)
+                        if not bytes_read:
+                            break
+                        s.sendall(bytes_read)
+            console.print(f"[bold green]Successfully sent {filename} to GCS.[/bold green]")
+            return True # Successfully sent
+        except ConnectionRefusedError:
+            console.print(f"[bold red]Error: GCS receiver not running or connection refused at {GCS_HOST}:{GCS_PORT}. Retrying in {retry_delay} seconds...[/bold red]")
+        except FileNotFoundError:
+            console.print(f"[bold red]Error: File not found at {filepath}. Skipping GCS transfer for this file.[/bold red]")
+            return False # No point in retrying if file doesn't exist
+        except socket.timeout:
+            console.print(f"[bold red]Error: Socket timeout while sending {filename} to GCS. Retrying in {retry_delay} seconds...[/bold red]")
+        except Exception as e:
+            console.print(f"[bold red]Error sending {filename} to GCS: {e}. Retrying in {retry_delay} seconds...[/bold red]")
+        
+        attempts += 1
+        time.sleep(retry_delay)
+    
+    console.print(f"[bold red]Failed to send {filename} to GCS after {max_retries} attempts.[/bold red]")
+    return False
 
 def delete_datasets_folder():
     """Deletes the server/datasets folder."""
@@ -189,16 +203,20 @@ def start_server():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # Optional: allows reuse of address
         s.bind((HOST, PORT))
         s.listen()
+        s.settimeout(1) # Set a timeout for accept to allow KeyboardInterrupt to be caught
         console.print(f"Server listening on {HOST}:{PORT}")
         console.print("Press Ctrl+C to stop the server.")
 
         try:
             while True:
-                conn, addr = s.accept()
-                thread = threading.Thread(target=handle_client, args=(conn, addr))
-                # Set as a daemon thread so it exits when the main program does
-                thread.daemon = True
-                thread.start()
+                try:
+                    conn, addr = s.accept()
+                    thread = threading.Thread(target=handle_client, args=(conn, addr))
+                    # Set as a daemon thread so it exits when the main program does
+                    thread.daemon = True
+                    thread.start()
+                except socket.timeout:
+                    pass # Timeout occurred, continue listening
         except KeyboardInterrupt:
             console.print("\nShutting down server...")
         finally:

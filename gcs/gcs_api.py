@@ -23,9 +23,16 @@ def upload_file():
     if file:
         filename = secure_filename(file.filename)
         filepath = os.path.join(RECEIVE_DIR, filename)
-        file.save(filepath)
-        console.print(f"[bold green]API: Received and saved {filename}[/bold green]")
-        return jsonify({"message": f"File {filename} uploaded successfully"}), 200
+        try:
+            file.save(filepath)
+            console.print(f"[bold green]API: Received and saved {filename}[/bold green]")
+            return jsonify({"message": f"File {filename} uploaded successfully"}), 200
+        except IOError as e:
+            console.print(f"[bold red]API: Error saving file {filename}: {e}[/bold red]")
+            return jsonify({"error": f"Error saving file: {e}"}), 500
+        except Exception as e:
+            console.print(f"[bold red]API: An unexpected error occurred during file save for {filename}: {e}[/bold red]")
+            return jsonify({"error": "Something went wrong during file save"}), 500
     return jsonify({"error": "Something went wrong"}), 500
 
 @app.route('/files', methods=['GET'])

@@ -33,6 +33,7 @@ def uploader_worker(upload_queue):
                 time.sleep(1) 
                 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(10) # Set a timeout for socket operations
                     print(f"Attempting to send {filename}...")
                     s.connect((HOST, PORT))
                     
