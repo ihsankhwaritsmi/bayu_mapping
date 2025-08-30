@@ -7,17 +7,125 @@ import time
 import subprocess # Import the subprocess module
 import shutil # Import shutil for directory operations
 from rich.console import Console
+from flask import Flask, render_template_string, send_from_directory, abort, request, redirect, url_for
+from werkzeug.utils import secure_filename
 
-HOST = '127.0.0.1'  # Standard loopback interface address (localhost)
+HOST = '0.0.0.0'  # Listen on all available interfaces for AWS compatibility
 PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
 GCS_HOST = '127.0.0.1' # GCS Host
 GCS_PORT = 65433     # GCS Port (must match gcs.py)
+FLASK_PORT = 5000   # Port for the Flask web server
+
 # Get the directory where the script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'images')
 MAPPING_SCRIPT_PATH = os.path.join(SCRIPT_DIR, 'mapping_script.sh')
 
 console = Console()
+app = Flask(__name__)
+
+# Inline HTML template for directory listing
+DIR_LISTING_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Directory Listing - {{ current_path }}</title>
+    <style>
+        body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; margin: 20px; }
+        h1 { color: #569cd6; }
+        a { color: #9cdcfe; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        ul { list-style-type: none; padding: 0; }
+        li { margin-bottom: 5px; }
+        .dir { color: #ce9178; }
+        .file { color: #d4d4d4; }
+        .parent-link { margin-bottom: 10px; display: block; }
+    </style>
+</head>
+<body>
+    <h1>Directory Listing for: {{ current_path }}</h1>
+    {% if parent_path %}
+        <a href="{{ parent_path }}" class="parent-link">.. (Parent Directory)</a>
+    {% endif %}
+    <ul>
+        {% for item in items %}
+            <li>
+                {% if item.type == 'dir' %}
+                    <span class="dir">[DIR]</span> <a href="{{ url_for('browse_directory', subpath=item.path) }}">{{ item.name }}</a>
+                {% else %}
+                    <span class="file">[FILE]</span> <a href="{{ url_for('download_file', filename=item.path) }}">{{ item.name }}</a>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
+"""
+
+@app.route('/browse/', defaults={'subpath': ''})
+@app.route('/browse/<path:subpath>')
+def browse_directory(subpath):
+    base_dir = UPLOAD_DIR
+    abs_path = os.path.join(base_dir, subpath)
+    
+    # Sanitize path to prevent directory traversal
+    if not os.path.abspath(abs_path).startswith(os.path.abspath(base_dir)):
+        abort(404)
+
+    if not os.path.exists(abs_path):
+        abort(404)
+
+    if os.path.isfile(abs_path):
+        # If it's a file, redirect to download it
+        relative_filepath = os.path.relpath(abs_path, UPLOAD_DIR)
+        return redirect(url_for('download_file', filename=relative_filepath))
+
+    items = []
+    try:
+        for item_name in os.listdir(abs_path):
+            item_path = os.path.join(abs_path, item_name)
+            relative_item_path = os.path.relpath(item_path, UPLOAD_DIR)
+            
+            if os.path.isdir(item_path):
+                items.append({'name': item_name, 'type': 'dir', 'path': relative_item_path})
+            else:
+                items.append({'name': item_name, 'type': 'file', 'path': relative_item_path})
+    except PermissionError:
+        console.print(f"[bold red]Permission denied to access {abs_path}[/bold red]")
+        abort(403) # Forbidden
+
+    # Sort items: directories first, then files, both alphabetically
+    items.sort(key=lambda x: (x['type'] == 'file', x['name'].lower()))
+
+    current_path_display = os.path.relpath(abs_path, UPLOAD_DIR) if abs_path != UPLOAD_DIR else '/'
+    
+    parent_path = None
+    if abs_path != UPLOAD_DIR:
+        parent_abs_path = os.path.dirname(abs_path)
+        relative_parent_path = os.path.relpath(parent_abs_path, UPLOAD_DIR)
+        if relative_parent_path == '.': # This means the parent is UPLOAD_DIR itself
+            parent_path = url_for('browse_directory', subpath='')
+        else:
+            parent_path = url_for('browse_directory', subpath=relative_parent_path)
+
+    return render_template_string(DIR_LISTING_TEMPLATE, 
+                                  current_path=current_path_display, 
+                                  items=items,
+                                  parent_path=parent_path)
+
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    # Sanitize filename to prevent directory traversal
+    safe_filename = secure_filename(filename)
+    if not os.path.abspath(os.path.join(UPLOAD_DIR, safe_filename)).startswith(os.path.abspath(UPLOAD_DIR)):
+        abort(404)
+    
+    try:
+        return send_from_directory(UPLOAD_DIR, safe_filename, as_attachment=True)
+    except FileNotFoundError:
+        abort(404)
 
 def handle_client(conn, addr):
     """Handles an individual client connection."""
@@ -189,10 +297,6 @@ def delete_datasets_folder():
 
 def start_server():
     """Starts the server and listens for incoming connections."""
-    if not os.path.exists(UPLOAD_DIR):
-        os.makedirs(UPLOAD_DIR)
-        console.print(f"Created upload directory: {UPLOAD_DIR}")
-
     # Start the flag monitoring thread
     flag_monitor_thread = threading.Thread(target=monitor_flag_files, daemon=True)
     flag_monitor_thread.start()
@@ -222,5 +326,25 @@ def start_server():
         finally:
             console.print("Server has been closed.")
 
+def run_flask_app():
+    """Runs the Flask application."""
+    console.print(f"Flask server starting on http://{HOST}:{FLASK_PORT}/browse/")
+    app.run(host=HOST, port=FLASK_PORT, debug=True, use_reloader=False) # Set debug to True for more detailed error messages
+
+@app.errorhandler(500)
+def internal_error(error):
+    console.print(f"[bold red]Flask Internal Server Error: {error}[/bold red]")
+    import traceback
+    console.print(f"[bold red]Traceback: {traceback.format_exc()}[/bold red]")
+    return "Internal Server Error", 500
+
 if __name__ == '__main__':
+    if not os.path.exists(UPLOAD_DIR):
+        os.makedirs(UPLOAD_DIR)
+        console.print(f"Created upload directory: {UPLOAD_DIR}")
+
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask_app, daemon=True)
+    flask_thread.start()
+    
     start_server()
