@@ -19,6 +19,7 @@ FLASK_PORT = 5000   # Port for the Flask web server
 # Get the directory where the script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'images')
+BROWSE_BASE_DIR = os.path.join(SCRIPT_DIR, 'datasets') # New base directory for browsing
 MAPPING_SCRIPT_PATH = os.path.join(SCRIPT_DIR, 'mapping_script.sh')
 
 console = Console()
@@ -67,8 +68,10 @@ DIR_LISTING_TEMPLATE = """
 @app.route('/browse/', defaults={'subpath': ''})
 @app.route('/browse/<path:subpath>')
 def browse_directory(subpath):
-    base_dir = UPLOAD_DIR
-    abs_path = os.path.join(base_dir, subpath)
+    base_dir = BROWSE_BASE_DIR
+    # Normalize subpath to use forward slashes for consistency
+    normalized_subpath = subpath.replace('\\', '/')
+    abs_path = os.path.join(base_dir, normalized_subpath)
     
     # Sanitize path to prevent directory traversal
     if not os.path.abspath(abs_path).startswith(os.path.abspath(base_dir)):
@@ -79,14 +82,14 @@ def browse_directory(subpath):
 
     if os.path.isfile(abs_path):
         # If it's a file, redirect to download it
-        relative_filepath = os.path.relpath(abs_path, UPLOAD_DIR)
+        relative_filepath = os.path.relpath(abs_path, BROWSE_BASE_DIR).replace('\\', '/')
         return redirect(url_for('download_file', filename=relative_filepath))
 
     items = []
     try:
         for item_name in os.listdir(abs_path):
             item_path = os.path.join(abs_path, item_name)
-            relative_item_path = os.path.relpath(item_path, UPLOAD_DIR)
+            relative_item_path = os.path.relpath(item_path, BROWSE_BASE_DIR).replace('\\', '/') # Normalize to forward slashes
             
             if os.path.isdir(item_path):
                 items.append({'name': item_name, 'type': 'dir', 'path': relative_item_path})
@@ -99,13 +102,13 @@ def browse_directory(subpath):
     # Sort items: directories first, then files, both alphabetically
     items.sort(key=lambda x: (x['type'] == 'file', x['name'].lower()))
 
-    current_path_display = os.path.relpath(abs_path, UPLOAD_DIR) if abs_path != UPLOAD_DIR else '/'
+    current_path_display = os.path.relpath(abs_path, BROWSE_BASE_DIR).replace('\\', '/') if abs_path != BROWSE_BASE_DIR else '/'
     
     parent_path = None
-    if abs_path != UPLOAD_DIR:
+    if abs_path != BROWSE_BASE_DIR:
         parent_abs_path = os.path.dirname(abs_path)
-        relative_parent_path = os.path.relpath(parent_abs_path, UPLOAD_DIR)
-        if relative_parent_path == '.': # This means the parent is UPLOAD_DIR itself
+        relative_parent_path = os.path.relpath(parent_abs_path, BROWSE_BASE_DIR).replace('\\', '/')
+        if relative_parent_path == '.': # This means the parent is BROWSE_BASE_DIR itself
             parent_path = url_for('browse_directory', subpath='')
         else:
             parent_path = url_for('browse_directory', subpath=relative_parent_path)
@@ -117,13 +120,18 @@ def browse_directory(subpath):
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    # Sanitize filename to prevent directory traversal
-    safe_filename = secure_filename(filename)
-    if not os.path.abspath(os.path.join(UPLOAD_DIR, safe_filename)).startswith(os.path.abspath(UPLOAD_DIR)):
+    # The filename is expected to be a relative path from BROWSE_BASE_DIR, already sanitized by browse_directory
+    # Ensure the path does not attempt directory traversal
+    # Normalize filename to use forward slashes for consistency
+    normalized_filename = filename.replace('\\', '/')
+    abs_filepath = os.path.join(BROWSE_BASE_DIR, normalized_filename)
+    if not os.path.abspath(abs_filepath).startswith(os.path.abspath(BROWSE_BASE_DIR)):
         abort(404)
     
+    # The filename is already the relative path from BROWSE_BASE_DIR.
+    # send_from_directory expects the base directory and the relative path to the file.
     try:
-        return send_from_directory(UPLOAD_DIR, safe_filename, as_attachment=True)
+        return send_from_directory(BROWSE_BASE_DIR, normalized_filename, as_attachment=True)
     except FileNotFoundError:
         abort(404)
 
@@ -339,9 +347,14 @@ def internal_error(error):
     return "Internal Server Error", 500
 
 if __name__ == '__main__':
+    # Ensure UPLOAD_DIR and BROWSE_BASE_DIR exist
     if not os.path.exists(UPLOAD_DIR):
         os.makedirs(UPLOAD_DIR)
         console.print(f"Created upload directory: {UPLOAD_DIR}")
+    
+    if not os.path.exists(BROWSE_BASE_DIR):
+        os.makedirs(BROWSE_BASE_DIR)
+        console.print(f"Created browse base directory: {BROWSE_BASE_DIR}")
 
     # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
