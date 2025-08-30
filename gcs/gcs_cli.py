@@ -12,6 +12,7 @@ console = Console()
 def handle_incoming_file(conn, addr):
     """Handles an individual incoming file connection."""
     console.print(f"[bold magenta]GCS: Connected by {addr}[/bold magenta]")
+    conn.settimeout(10) # Set a timeout for client connection operations
     try:
         # Receive file name length first
         file_name_len_bytes = conn.recv(4)
@@ -53,15 +54,19 @@ def start_gcs_receiver():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((HOST, PORT))
         s.listen()
+        s.settimeout(1) # Set a timeout for accept to allow KeyboardInterrupt to be caught
         console.print(f"[bold magenta]GCS: Receiver listening on {HOST}:{PORT}[/bold magenta]")
         console.print("GCS: Press Ctrl+C to stop the receiver.")
 
         try:
             while True:
-                conn, addr = s.accept()
-                thread = threading.Thread(target=handle_incoming_file, args=(conn, addr))
-                thread.daemon = True
-                thread.start()
+                try:
+                    conn, addr = s.accept()
+                    thread = threading.Thread(target=handle_incoming_file, args=(conn, addr))
+                    thread.daemon = True
+                    thread.start()
+                except socket.timeout:
+                    pass # Timeout occurred, continue listening
         except KeyboardInterrupt:
             console.print("\n[bold magenta]GCS: Shutting down receiver...[/bold magenta]")
         finally:
