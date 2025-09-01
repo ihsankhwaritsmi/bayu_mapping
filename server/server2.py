@@ -170,56 +170,59 @@ def handle_client(conn, addr):
         conn.close()
         console.print(f"Connection with {addr} closed.")
 
+def execute_odm_process(flag_file):
+    """Executes the ODM mapping script and deletes the flag file."""
+    console.print(f"[bold green]Ready to make an orthophoto for {flag_file}[/bold green]")
+    console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
+    try:
+        process = subprocess.Popen(
+            [MAPPING_SCRIPT_PATH],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+
+        for line in process.stdout:
+            console.print(f"[blue]SCRIPT OUT:[/blue] {line.strip()}")
+        for line in process.stderr:
+            console.print(f"[red]SCRIPT ERR:[/red] {line.strip()}")
+
+        process.wait()
+
+        if process.returncode == 0:
+            console.print(f"[bold green]Mapping script executed successfully for {flag_file}![/bold green]")
+        else:
+            console.print(f"[bold red]Mapping script exited with error code: {process.returncode} for {flag_file}[/bold red]")
+
+    except FileNotFoundError:
+        console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
+    except Exception as e:
+        console.print(f"[bold red]An unexpected error occurred while running the mapping script for {flag_file}: {e}[/bold red]")
+    finally:
+        try:
+            os.remove(flag_file)
+            console.print(f"Deleted flag file: {flag_file}")
+        except OSError as e:
+            console.print(f"Error deleting flag file {flag_file}: {e}")
+
 def monitor_flag_files():
-    """Continuously monitors the UPLOAD_DIR for flag files."""
-    flag_detected = False
+    """Continuously monitors the UPLOAD_DIR for flag files and starts ODM processes in separate threads."""
+    processed_flags = set() # Keep track of flags that have already been processed or are being processed
     while True:
-        flag_files = glob.glob(os.path.join(UPLOAD_DIR, '*.flag'))
-        if flag_files and not flag_detected:
-            console.print("[bold green]Ready to make an orthophoto[/bold green]")
-            flag_detected = True
-            # Execute the mapping script
-            console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
-            try:
-                # Use subprocess.run to execute the shell script
-                # Use subprocess.Popen to stream output in real-time
-                process = subprocess.Popen(
-                    [MAPPING_SCRIPT_PATH],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True, # Decode stdout/stderr as text
-                    bufsize=1 # Line-buffered output
-                )
+        current_flag_files = set(glob.glob(os.path.join(UPLOAD_DIR, '*.flag')))
+        
+        new_flag_files = current_flag_files - processed_flags
 
-                # Stream stdout
-                for line in process.stdout:
-                    console.print(f"[blue]SCRIPT OUT:[/blue] {line.strip()}")
-                # Stream stderr
-                for line in process.stderr:
-                    console.print(f"[red]SCRIPT ERR:[/red] {line.strip()}")
+        for flag_file in new_flag_files:
+            console.print(f"Detected new flag file: {flag_file}. Starting ODM process in a new thread.")
+            odm_thread = threading.Thread(target=execute_odm_process, args=(flag_file,), daemon=True)
+            odm_thread.start()
+            processed_flags.add(flag_file)
+        
+        # Remove flags that no longer exist (meaning they've been processed and deleted)
+        processed_flags = processed_flags.intersection(current_flag_files)
 
-                # Wait for the process to complete and get the return code
-                process.wait()
-
-                if process.returncode == 0:
-                    console.print("[bold green]Mapping script executed successfully![/bold green]")
-                else:
-                    console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
-
-            except FileNotFoundError:
-                console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
-            except Exception as e:
-                console.print(f"[bold red]An unexpected error occurred while running the mapping script: {e}[/bold red]")
-
-            # Delete the flag files after attempting to run the script
-            for flag_file in flag_files:
-                try:
-                    os.remove(flag_file)
-                    console.print(f"Deleted flag file: {flag_file}")
-                except OSError as e:
-                    console.print(f"Error deleting flag file {flag_file}: {e}")
-        elif not flag_files and flag_detected:
-            flag_detected = False # Reset if flag files are removed
         time.sleep(1) # Prevent busy-waiting
 
 def start_server():
