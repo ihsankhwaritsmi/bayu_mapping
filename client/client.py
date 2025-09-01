@@ -15,45 +15,58 @@ def uploader_worker(upload_queue):
     """
     Pulls filepaths from a queue and sends them to the server.
     Retries indefinitely on connection failure.
+    Deletes image files and the flag file after successful transmission of a flag file.
     """
-    # Add a small delay to ensure the server is ready to receive
     time.sleep(2)
+    files_in_current_mission = [] # Stores paths of files successfully sent in the current mission batch
+
     while True:
         filepath = upload_queue.get()
         if filepath is None:  # Sentinel value to signal thread termination
             break
 
         filename = os.path.basename(filepath)
-        file_ext = filename.split('.')[-1]
+        file_ext = filename.split('.')[-1].lower() # Ensure extension is lowercase for consistent comparison
         
         sent_successfully = False
         while not sent_successfully:
             try:
-                # Brief pause to ensure the file is fully written before sending
                 time.sleep(1) 
                 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(10) # Set a timeout for socket operations
+                    s.settimeout(10) 
                     print(f"Attempting to send {filename}...")
                     s.connect((HOST, PORT))
                     
-                    # 1. Send file extension length and then extension
                     ext_bytes = file_ext.encode('utf-8')
                     s.sendall(len(ext_bytes).to_bytes(4, 'big'))
                     s.sendall(ext_bytes)
 
-                    # 2. Send the file data
                     with open(filepath, 'rb') as f:
                         s.sendall(f.read())
 
                     print(f"✅ Successfully sent {filename} to server.")
                     sent_successfully = True
 
+                    # Add to mission list if successfully sent
+                    files_in_current_mission.append(filepath)
+
+                    # If a flag file was just sent, trigger batch deletion
+                    if file_ext == FLAG_FILE_EXTENSION:
+                        print(f"🚩 Flag file {filename} sent. Initiating deletion of mission files...")
+                        for file_to_delete in files_in_current_mission:
+                            try:
+                                os.remove(file_to_delete)
+                                print(f"🗑️ Deleted file: {os.path.basename(file_to_delete)}")
+                            except OSError as e:
+                                print(f"❗️ Error deleting {os.path.basename(file_to_delete)}: {e}")
+                        files_in_current_mission.clear() # Reset for the next mission
+
             except ConnectionRefusedError:
                 print(f"❗️ Connection refused for {filename}. Retrying in 5 seconds...")
                 time.sleep(5)
             except FileNotFoundError:
-                print(f"❗️ File {filename} was not found. It might have been deleted. Skipping.")
+                print(f"❗️ File {filename} was not found. It might have been deleted externally. Skipping.")
                 break # Stop trying for this file
             except Exception as e:
                 print(f"❗️ Error sending {filename}: {e}. Retrying in 5 seconds...")
@@ -72,7 +85,7 @@ class ImageHandler(FileSystemEventHandler):
         if not event.is_directory:
             filepath = event.src_path
             filename = os.path.basename(filepath)
-            file_ext = filename.split('.')[-1].lower()
+            file_ext = filename.split('.')[-1].lower() # Ensure extension is lowercase
             if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
                 print(f"📥 Detected new image, adding to queue: {filename}")
                 self.upload_queue.put(filepath)
