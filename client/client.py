@@ -6,7 +6,7 @@ import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-HOST = '127.0.0.1'  # The server's hostname or IP address
+HOST = '172.232.231.100'  # The server's hostname or IP address
 PORT = 65432        # The port used by the server
 GOPRO_CAPTURES_DIR = 'gopro_captures'
 FLAG_FILE_EXTENSION = "flag"

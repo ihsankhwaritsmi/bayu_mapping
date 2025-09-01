@@ -2,3 +2,4 @@ datasets
 .vscode
 *.log
 gopro_captures
+gopro_demo.log
