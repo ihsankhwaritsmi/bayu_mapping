@@ -3,6 +3,7 @@ import os
 import time
 import queue
 import threading
+import json # Import json for status messages
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -10,6 +11,9 @@ HOST = '172.232.231.100'  # The server's hostname or IP address
 PORT = 65432        # The port used by the server
 GOPRO_CAPTURES_DIR = 'gopro_captures'
 FLAG_FILE_EXTENSION = "flag"
+STATUS_CHECK_INTERVAL = 10 # Seconds between status checks
+MESSAGE_TYPE_STATUS = "status_check"
+MESSAGE_TYPE_FILE = "file_upload"
 
 def uploader_worker(upload_queue):
     """
@@ -74,6 +78,36 @@ def uploader_worker(upload_queue):
         
         upload_queue.task_done()
 
+def send_status_message():
+    """Sends a status message to the server."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(5)
+            s.connect((HOST, PORT))
+            
+            status_data = {
+                "type": MESSAGE_TYPE_STATUS,
+                "client_program": "connected",
+                "mavlink": "connected", # Placeholder for actual check
+                "gopro": "connected"    # Placeholder for actual check
+            }
+            message = json.dumps(status_data).encode('utf-8')
+            
+            # Send message type identifier first
+            message_type_bytes = MESSAGE_TYPE_STATUS.encode('utf-8')
+            s.sendall(len(message_type_bytes).to_bytes(4, 'big'))
+            s.sendall(message_type_bytes)
+
+            # Send the actual status message length and content
+            s.sendall(len(message).to_bytes(4, 'big'))
+            s.sendall(message)
+            print(f"✅ Sent status message to server: {status_data}")
+    except ConnectionRefusedError:
+        print(f"❗️ Status check: Connection refused. Server might be down.")
+    except socket.timeout:
+        print(f"❗️ Status check: Connection timed out.")
+    except Exception as e:
+        print(f"❗️ Error sending status message: {e}")
 
 class ImageHandler(FileSystemEventHandler):
     """Queues new images for upload instead of sending them directly."""
@@ -112,12 +146,19 @@ def start_client():
     print(f"Client monitoring {GOPRO_CAPTURES_DIR} for new images...")
     print("Press Ctrl+C to stop the client.")
 
+    # Start a separate thread for periodic status checks
+    stop_event = threading.Event()
+    status_thread = threading.Thread(target=periodic_status_check, args=(stop_event,))
+    status_thread.start()
+
     try:
         worker_thread.join()
     except KeyboardInterrupt:
         print("\nShutting down client...")
         observer.stop()
         observer.join()
+        stop_event.set() # Signal status thread to stop
+        status_thread.join() # Wait for status thread to finish
 
         # Wait for the queue to be empty (all files uploaded)
         print("Waiting for pending uploads to complete...")
@@ -130,6 +171,12 @@ def start_client():
            worker_thread.join()
         
         print("Client has shut down.")
+
+def periodic_status_check(stop_event):
+    """Sends status messages periodically."""
+    while not stop_event.is_set():
+        send_status_message()
+        stop_event.wait(STATUS_CHECK_INTERVAL) # Wait for interval or until signaled to stop
 
 if __name__ == '__main__':
     start_client()

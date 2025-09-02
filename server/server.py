@@ -6,9 +6,13 @@ import glob
 import time
 import subprocess # Import the subprocess module
 import shutil # Import shutil for directory operations
+import json # Import json for status messages
 from rich.console import Console
 from flask import Flask, render_template_string, send_from_directory, abort, request, redirect, url_for
 from werkzeug.utils import secure_filename
+
+MESSAGE_TYPE_STATUS = "status_check"
+MESSAGE_TYPE_FILE = "file_upload"
 
 HOST = '0.0.0.0'  # Listen on all available interfaces for AWS compatibility
 PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
@@ -140,32 +144,63 @@ def handle_client(conn, addr):
     console.print(f"Connected by {addr}")
     conn.settimeout(10) # Set a timeout for client connection operations
     try:
-        # Receive file extension first
-        file_ext_len_bytes = conn.recv(4)
-        if not file_ext_len_bytes:
-            console.print(f"Client {addr} disconnected before sending extension length.")
+        # First, receive the message type identifier
+        message_type_len_bytes = conn.recv(4)
+        if not message_type_len_bytes:
+            console.print(f"Client {addr} disconnected before sending message type length.")
             return
-        file_ext_len = int.from_bytes(file_ext_len_bytes, 'big')
-        file_ext = conn.recv(file_ext_len).decode('utf-8')
+        message_type_len = int.from_bytes(message_type_len_bytes, 'big')
+        message_type = conn.recv(message_type_len).decode('utf-8')
 
-        if not file_ext:
-            console.print(f"Client {addr} disconnected or sent empty extension.")
-            return
+        if message_type == MESSAGE_TYPE_STATUS:
+            # Handle status message
+            message_len_bytes = conn.recv(4)
+            if not message_len_bytes:
+                console.print(f"Client {addr} disconnected before sending status message length.")
+                return
+            message_len = int.from_bytes(message_len_bytes, 'big')
+            status_message_bytes = conn.recv(message_len)
+            status_message = json.loads(status_message_bytes.decode('utf-8'))
+            console.print(f"Received status from {addr}: [bold blue]Client Program: {status_message.get('client_program')}[/bold blue], [bold blue]Mavlink: {status_message.get('mavlink')}[/bold blue], [bold blue]GoPro: {status_message.get('gopro')}[/bold blue]")
+            # Optionally send a response back to the client
+            conn.sendall(b"Status received.")
 
-        # Create a unique filename and save the file
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"image_{timestamp}.{file_ext}"
-        filepath = os.path.join(UPLOAD_DIR, filename)
+        elif message_type == MESSAGE_TYPE_FILE:
+            # Handle file upload
+            # Receive file extension first
+            file_ext_len_bytes = conn.recv(4)
+            if not file_ext_len_bytes:
+                console.print(f"Client {addr} disconnected before sending extension length.")
+                return
+            file_ext_len = int.from_bytes(file_ext_len_bytes, 'big')
+            file_ext = conn.recv(file_ext_len).decode('utf-8')
 
-        with open(filepath, 'wb') as f:
-            while True:
-                data = conn.recv(4096)
-                if not data:
-                    break
-                f.write(data)
-        console.print(f"Received and saved {filename} from {addr}")
+            if not file_ext:
+                console.print(f"Client {addr} disconnected or sent empty extension.")
+                return
+
+            # Create a unique filename and save the file
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"image_{timestamp}.{file_ext}"
+            filepath = os.path.join(UPLOAD_DIR, filename)
+
+            with open(filepath, 'wb') as f:
+                while True:
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    f.write(data)
+            console.print(f"Received and saved {filename} from {addr}")
+            conn.sendall(b"File received.")
+        else:
+            console.print(f"Received unknown message type '{message_type}' from {addr}.")
+
     except ConnectionResetError:
         console.print(f"Client {addr} forcefully closed the connection.")
+    except socket.timeout:
+        console.print(f"Socket timeout with client {addr}.")
+    except json.JSONDecodeError:
+        console.print(f"Error decoding JSON from client {addr}.")
     except Exception as e:
         console.print(f"Error handling client {addr}: {e}")
     finally:
