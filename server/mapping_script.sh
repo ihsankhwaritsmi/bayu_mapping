@@ -1,14 +1,20 @@
 #!/bin/bash
 
-#!/bin/bash
+# The first argument is expected to be the UPLOAD_DIR
+UPLOAD_DIR="$1"
 
-# Get the directory where the script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+if [ -z "$UPLOAD_DIR" ]; then
+  echo "Error: UPLOAD_DIR not provided as an argument."
+  exit 1
+fi
+
+echo "Starting OpenDroneMap processing for images in: $UPLOAD_DIR"
 
 docker run -ti --rm \
-  -v "${SCRIPT_DIR}/datasets":/datasets \
+  -v "${UPLOAD_DIR}":/data \
   opendronemap/odm \
-  --project-path /datasets project \
+  --project-path /data/odm_project \
+  --images /data \
   --fast-orthophoto \
   --skip-report
 

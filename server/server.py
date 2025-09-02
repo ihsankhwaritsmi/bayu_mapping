@@ -236,11 +236,16 @@ def monitor_flag_files():
                 console.print("[bold green]Flag file detected! Ready to start orthophoto generation.[/bold green]")
                 
                 # Execute the mapping script
-                console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
+                console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH} with UPLOAD_DIR={UPLOAD_DIR}")
                 try:
-                    # Use Popen to stream stdout/stderr in real-time
+                    # Ensure the mapping script is executable
+                    if not os.access(MAPPING_SCRIPT_PATH, os.X_OK):
+                        console.print(f"[bold red]Error: Mapping script {MAPPING_SCRIPT_PATH} is not executable. Attempting to make it executable.[/bold red]")
+                        os.chmod(MAPPING_SCRIPT_PATH, 0o755) # Make it executable for owner, group, others
+
+                    # Use Popen to stream stdout/stderr in real-time, passing UPLOAD_DIR as an argument
                     process = subprocess.Popen(
-                        [MAPPING_SCRIPT_PATH],
+                        [MAPPING_SCRIPT_PATH, UPLOAD_DIR], # Pass UPLOAD_DIR as an argument
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,

@@ -13,8 +13,8 @@ from watchdog.events import FileSystemEventHandler
 
 # console = Console() # Initialize console for rich output
 
-# HOST = '172.232.231.100'  # The server's hostname or IP address
-HOST = '127.0.0.1' # Use localhost for testing
+HOST = '172.232.231.100'  # The server's hostname or IP address
+# HOST = '127.0.0.1' # Use localhost for testing
 PORT = 65432        # The port used by the server
 GOPRO_CAPTURES_DIR = 'gopro_captures'
 FLAG_FILE_EXTENSION = "flag"
@@ -38,7 +38,6 @@ def uploader_worker(upload_queue):
     Retries indefinitely on connection failure.
     Deletes image files and the flag file after successful transmission of a flag file.
     """
-    time.sleep(2)
     files_in_current_mission = [] # Stores paths of files successfully sent in the current mission batch
 
     while True:
@@ -209,7 +208,9 @@ def start_client():
     pix2rasp_receiver_thread.start()
 
     try:
-        worker_thread.join()
+        # Keep the main thread alive, waiting for a KeyboardInterrupt
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         print("\nShutting down client...")
         observer.stop()
@@ -220,13 +221,11 @@ def start_client():
 
         # Wait for the queue to be empty (all files uploaded)
         print("Waiting for pending uploads to complete...")
-        upload_queue.join()
+        upload_queue.join() # Ensure all tasks are done before signaling worker to stop
 
         # Stop the worker thread gracefully
-        upload_queue.put(None)
-        # The main thread already joined, but we do it again to be sure
-        if worker_thread.is_alive():
-           worker_thread.join()
+        upload_queue.put(None) # Signal the uploader_worker to terminate
+        worker_thread.join() # Wait for the uploader_worker to finish
         
         print("Client has shut down.")
 
