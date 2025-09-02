@@ -13,9 +13,13 @@ from watchdog.events import FileSystemEventHandler
 
 # console = Console() # Initialize console for rich output
 
-HOST = '172.232.231.100'  # The server's hostname or IP address
+HOST = '172.232.231.100'  # The server's hostname or IP address for file uploads
 # HOST = '127.0.0.1' # Use localhost for testing
-PORT = 65432        # The port used by the server
+PORT = 65432        # The port used by the server for file uploads
+
+STATUS_HOST = HOST # Use the same host as for file uploads
+STATUS_PORT = 65433       # Port for status messages (server2)
+
 GOPRO_CAPTURES_DIR = 'gopro_captures'
 FLAG_FILE_EXTENSION = "flag"
 STATUS_CHECK_INTERVAL = 10 # Seconds between status checks
@@ -135,7 +139,7 @@ def send_status_message():
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(5)
-            s.connect((HOST, PORT))
+            s.connect((STATUS_HOST, STATUS_PORT))
             
             status_data = {
                 "type": MESSAGE_TYPE_STATUS,
