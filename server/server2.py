@@ -159,7 +159,10 @@ def handle_client(conn, addr):
             message_len = int.from_bytes(message_len_bytes, 'big')
             status_message_bytes = conn.recv(message_len)
             status_message = json.loads(status_message_bytes.decode('utf-8'))
-            console.print(f"Received status from {addr}: [bold blue]Client Program: {status_message.get('client_program')}[/bold blue], [bold blue]Mavlink: {status_message.get('mavlink')}[/bold blue], [bold blue]GoPro: {status_message.get('gopro')}[/bold blue]")
+            console.print(f"Received status from {addr}:\n"
+                          f"  [bold blue]Client Program: {status_message.get('client_program')}[/bold blue]\n"
+                          f"  [bold blue]Mavlink: {status_message.get('mavlink')}[/bold blue]\n"
+                          f"  [bold blue]GoPro: {status_message.get('gopro')}[/bold blue]")
             # Optionally send a response back to the client
             conn.sendall(b"Status received.")
 

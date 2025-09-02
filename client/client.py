@@ -4,16 +4,33 @@ import time
 import queue
 import threading
 import json # Import json for status messages
+# asyncio is no longer needed for direct GoPro checks in client.py
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-HOST = '172.232.231.100'  # The server's hostname or IP address
+# rich.console is no longer needed here as pix2rasp_real.py will handle its own console output
+# from rich.console import Console 
+
+# console = Console() # Initialize console for rich output
+
+# HOST = '172.232.231.100'  # The server's hostname or IP address
+HOST = '127.0.0.1' # Use localhost for testing
 PORT = 65432        # The port used by the server
 GOPRO_CAPTURES_DIR = 'gopro_captures'
 FLAG_FILE_EXTENSION = "flag"
 STATUS_CHECK_INTERVAL = 10 # Seconds between status checks
 MESSAGE_TYPE_STATUS = "status_check"
 MESSAGE_TYPE_FILE = "file_upload"
+
+# UDP port for pix2rasp_real.py to send status to client.py
+PIX2RASP_STATUS_PORT = 50000 
+
+# Shared state for pix2rasp status
+pix2rasp_status = {
+    "gopro_connected": "disconnected",
+    "mavlink_connected": "disconnected"
+}
+pix2rasp_status_lock = threading.Lock()
 
 def uploader_worker(upload_queue):
     """
@@ -78,8 +95,44 @@ def uploader_worker(upload_queue):
         
         upload_queue.task_done()
 
+def pix2rasp_status_receiver_worker(stop_event):
+    """Receives pix2rasp_real.py status via UDP and updates shared state."""
+    global pix2rasp_status
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', PIX2RASP_STATUS_PORT))
+    sock.settimeout(1) # Set a timeout to allow checking stop_event
+
+    print(f"Listening for pix2rasp status on UDP port {PIX2RASP_STATUS_PORT}...")
+
+    while not stop_event.is_set():
+        try:
+            data, addr = sock.recvfrom(1024) # Buffer size 1024 bytes
+            message = json.loads(data.decode('utf-8'))
+            if message.get("type") == "pix2rasp_status":
+                with pix2rasp_status_lock:
+                    
+                    pix2rasp_status["gopro_connected"] = message.get("gopro_connected", "disconnected")
+                    
+                    pix2rasp_status["mavlink_connected"] = message.get("mavlink_connected", "disconnected")
+                # print(f"Received pix2rasp status: {pix2rasp_status}") # Uncomment for debugging
+        except socket.timeout:
+            pass # No data received, check stop_event
+        except json.JSONDecodeError:
+            print(f"❗️ Error decoding JSON from pix2rasp status message.")
+        except Exception as e:
+            print(f"❗️ Error in pix2rasp status receiver: {e}")
+    sock.close()
+    print("Pix2rasp status receiver shut down.")
+
+
 def send_status_message():
     """Sends a status message to the server."""
+    client_program_status = "connected" # Client program is running if this function is called
+    
+    with pix2rasp_status_lock:
+        mavlink_status = pix2rasp_status["mavlink_connected"]
+        gopro_status = pix2rasp_status["gopro_connected"]
+
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(5)
@@ -87,9 +140,9 @@ def send_status_message():
             
             status_data = {
                 "type": MESSAGE_TYPE_STATUS,
-                "client_program": "connected",
-                "mavlink": "connected", # Placeholder for actual check
-                "gopro": "connected"    # Placeholder for actual check
+                "client_program": client_program_status,
+                "mavlink": mavlink_status,
+                "gopro": gopro_status
             }
             message = json.dumps(status_data).encode('utf-8')
             
@@ -151,14 +204,19 @@ def start_client():
     status_thread = threading.Thread(target=periodic_status_check, args=(stop_event,))
     status_thread.start()
 
+    # Start pix2rasp status receiver thread
+    pix2rasp_receiver_thread = threading.Thread(target=pix2rasp_status_receiver_worker, args=(stop_event,))
+    pix2rasp_receiver_thread.start()
+
     try:
         worker_thread.join()
     except KeyboardInterrupt:
         print("\nShutting down client...")
         observer.stop()
         observer.join()
-        stop_event.set() # Signal status thread to stop
+        stop_event.set() # Signal all threads to stop
         status_thread.join() # Wait for status thread to finish
+        pix2rasp_receiver_thread.join() # Wait for pix2rasp receiver thread to finish
 
         # Wait for the queue to be empty (all files uploaded)
         print("Waiting for pending uploads to complete...")

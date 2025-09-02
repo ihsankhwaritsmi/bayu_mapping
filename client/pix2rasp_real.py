@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import re
+import socket # For UDP status messages
+import json # For JSON status messages
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from open_gopro.util.logger import setup_logging
 console = Console()
 
 FLAG_FILE_EXTENSION = "flag"
+PIX2RASP_STATUS_PORT = 50000 # UDP port for pix2rasp_real.py to send status to client.py
+STATUS_SEND_INTERVAL = 5 # Seconds between status sends
 
 async def create_flag_file(output_dir: Path):
     """Create a flag file to indicate mission completion."""
@@ -30,9 +34,10 @@ async def create_flag_file(output_dir: Path):
     except Exception as e:
         console.print(f"[bold red]Failed to create flag file: {repr(e)}[/bold red]")
 
-# --- Shared state to control the photo-taking loop ---
+# --- Shared state to control the photo-taking loop and report status ---
 take_photos = False
 gopro_is_ready = False
+mavlink_is_connected = False
 
 
 async def gopro_controller(args: argparse.Namespace, output_dir: Path):
@@ -121,7 +126,7 @@ async def gopro_controller(args: argparse.Namespace, output_dir: Path):
 
 async def mavlink_listener(connection_string: str, output_dir):
     """Listens for MAVLink messages and toggles the photo-taking state."""
-    global take_photos, gopro_is_ready
+    global take_photos, gopro_is_ready, mavlink_is_connected
 
     # Outer loop for handling MAVLink reconnections
     while True:
@@ -138,6 +143,7 @@ async def mavlink_listener(connection_string: str, output_dir):
 
             master.wait_heartbeat()
             console.print(f"✅ MAVLink Heartbeat received from System ID: {master.target_system}")
+            mavlink_is_connected = True
 
             # --- MAVLink message listening loop ---
             while True:
@@ -172,11 +178,36 @@ async def mavlink_listener(connection_string: str, output_dir):
 
         except Exception as e:
             console.print(f"[bold red]MAVLink connection error: {repr(e)}. Retrying in 10 seconds...[/bold red]")
+            mavlink_is_connected = False # Update status on disconnection
             await asyncio.sleep(10)
+
+async def periodic_pix2rasp_status_sender():
+    """Periodically sends pix2rasp_real.py's status via UDP."""
+    global gopro_is_ready, mavlink_is_connected
+    
+    # Create a UDP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    while True:
+        status_data = {
+            "type": "pix2rasp_status",
+            "gopro_connected": "connected" if gopro_is_ready else "disconnected",
+            "mavlink_connected": "connected" if mavlink_is_connected else "disconnected"
+        }
+        message = json.dumps(status_data).encode('utf-8')
+        
+        try:
+            # Send to localhost on the defined port
+            sock.sendto(message, ('127.0.0.1', PIX2RASP_STATUS_PORT))
+            # console.print(f"[dim]Sent pix2rasp status: {status_data}[/dim]") # Uncomment for debugging
+        except Exception as e:
+            console.print(f"[bold red]Error sending pix2rasp status via UDP: {e}[/bold red]")
+            
+        await asyncio.sleep(STATUS_SEND_INTERVAL)
 
 
 async def main(args: argparse.Namespace):
-    """Run MAVLink listener and GoPro controller concurrently."""
+    """Run MAVLink listener, GoPro controller, and status sender concurrently."""
     setup_logging(__name__, args.log)
 
     output_dir = args.output
@@ -184,13 +215,14 @@ async def main(args: argparse.Namespace):
     console.print(f"📸 Photos will be saved to: {output_dir.absolute()}")
 
     # --- MAVLink Configuration ---
-    connection_string = "tcp:127.0.0.1:5762"
+    connection_string = "tcp:127.0.0.1:5760"
     # connection_string = "/dev/ttyAMA0:57600"
 
     try:
         await asyncio.gather(
             mavlink_listener(connection_string, output_dir),
             gopro_controller(args, output_dir),
+            periodic_pix2rasp_status_sender(), # Add the status sender task
         )
     except KeyboardInterrupt:
         console.print("\nExiting program by user command.")
