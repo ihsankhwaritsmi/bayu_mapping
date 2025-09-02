@@ -16,8 +16,6 @@ MESSAGE_TYPE_FILE = "file_upload"
 
 HOST = '0.0.0.0'  # Listen on all available interfaces for AWS compatibility
 PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
-GCS_HOST = '127.0.0.1' # GCS Host
-GCS_PORT = 65433     # GCS Port (must match gcs.py)
 FLASK_PORT = 5000   # Port for the Flask web server
 
 # Get the directory where the script is located
@@ -161,10 +159,18 @@ def handle_client(conn, addr):
             message_len = int.from_bytes(message_len_bytes, 'big')
             status_message_bytes = conn.recv(message_len)
             status_message = json.loads(status_message_bytes.decode('utf-8'))
+            
+            client_program_status = status_message.get('client_program', 'unknown')
+            mavlink_status = status_message.get('mavlink', 'unknown')
+            gopro_status = status_message.get('gopro', 'unknown')
+
+            mavlink_color = "green" if mavlink_status == "connected" else "red"
+            gopro_color = "green" if gopro_status == "connected" else "red"
+
             console.print(f"Received status from {addr}:\n"
-                          f"  [bold blue]Client Program: {status_message.get('client_program')}[/bold blue]\n"
-                          f"  [bold blue]Mavlink: {status_message.get('mavlink')}[/bold blue]\n"
-                          f"  [bold blue]GoPro: {status_message.get('gopro')}[/bold blue]")
+                          f"  [bold blue]Client Program: {client_program_status}[/bold blue]\n"
+                          f"  [bold {mavlink_color}]Mavlink: {mavlink_status}[/bold {mavlink_color}]\n"
+                          f"  [bold {gopro_color}]GoPro: {gopro_status}[/bold {gopro_color}]")
             # Optionally send a response back to the client
             conn.sendall(b"Status received.")
 
@@ -243,23 +249,6 @@ def monitor_flag_files():
 
                 if process.returncode == 0:
                     console.print("[bold green]Mapping script executed successfully![/bold green]")
-                    # After successful mapping, send orthophotos to GCS
-                    orthophoto_path = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'odm_orthophoto', 'odm_orthophoto.tif')
-                    original_orthophoto_path = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'odm_orthophoto', 'odm_orthophoto.original.tif')
-
-                    if os.path.exists(orthophoto_path):
-                        send_file_to_gcs(orthophoto_path, max_retries=3, retry_delay=5)
-                    else:
-                        console.print(f"[bold yellow]Warning: {orthophoto_path} not found. Skipping transfer.[/bold yellow]")
-
-                    if os.path.exists(original_orthophoto_path):
-                        send_file_to_gcs(original_orthophoto_path, max_retries=3, retry_delay=5)
-                    else:
-                        console.print(f"[bold yellow]Warning: {original_orthophoto_path} not found. Skipping transfer.[/bold yellow]")
-
-                    # Delete the datasets folder after sending files
-                    delete_datasets_folder()
-
                 else:
                     console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
 
@@ -278,68 +267,6 @@ def monitor_flag_files():
         elif not flag_files and flag_detected:
             flag_detected = False # Reset if flag files are removed
         time.sleep(1) # Prevent busy-waiting
-
-def send_file_to_gcs(filepath, max_retries=3, retry_delay=5):
-    """Sends a file to the GCS receiver with retry mechanism."""
-    filename = os.path.basename(filepath)
-    attempts = 0
-    while attempts < max_retries:
-        console.print(f"Attempt {attempts + 1}/{max_retries}: Sending {filename} to GCS at {GCS_HOST}:{GCS_PORT}")
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(10) # Set a timeout for GCS socket operations
-                s.connect((GCS_HOST, GCS_PORT))
-                # Send file name length and then file name
-                file_name_bytes = filename.encode('utf-8')
-                s.sendall(len(file_name_bytes).to_bytes(4, 'big'))
-                s.sendall(file_name_bytes)
-
-                # Send file content
-                with open(filepath, 'rb') as f:
-                    while True:
-                        bytes_read = f.read(4096)
-                        if not bytes_read:
-                            break
-                        s.sendall(bytes_read)
-            console.print(f"[bold green]Successfully sent {filename} to GCS.[/bold green]")
-            return True # Successfully sent
-        except ConnectionRefusedError:
-            console.print(f"[bold red]Error: GCS receiver not running or connection refused at {GCS_HOST}:{GCS_PORT}. Retrying in {retry_delay} seconds...[/bold red]")
-        except FileNotFoundError:
-            console.print(f"[bold red]Error: File not found at {filepath}. Skipping GCS transfer for this file.[/bold red]")
-            return False # No point in retrying if file doesn't exist
-        except socket.timeout:
-            console.print(f"[bold red]Error: Socket timeout while sending {filename} to GCS. Retrying in {retry_delay} seconds...[/bold red]")
-        except Exception as e:
-            console.print(f"[bold red]Error sending {filename} to GCS: {e}. Retrying in {retry_delay} seconds...[/bold red]")
-        
-        attempts += 1
-        time.sleep(retry_delay)
-    
-    console.print(f"[bold red]Failed to send {filename} to GCS after {max_retries} attempts.[/bold red]")
-    return False
-
-def delete_datasets_folder():
-    """Deletes the server/datasets folder."""
-    datasets_path = os.path.join(SCRIPT_DIR, 'datasets')
-    console.print(f"Attempting to delete datasets folder: {datasets_path}")
-    try:
-        if os.path.exists(datasets_path):
-            # First, try to change permissions recursively to ensure deletion is possible
-            console.print(f"Setting permissions for {datasets_path} to allow deletion...")
-            for dirpath, dirnames, filenames in os.walk(datasets_path):
-                os.chmod(dirpath, 0o777) # Set directory permissions
-                for filename in filenames:
-                    os.chmod(os.path.join(dirpath, filename), 0o777) # Set file permissions
-            
-            shutil.rmtree(datasets_path)
-            console.print(f"[bold green]Successfully deleted datasets folder: {datasets_path}[/bold green]")
-        else:
-            console.print(f"[bold yellow]Warning: Datasets folder not found at {datasets_path}. Nothing to delete.[/bold yellow]")
-    except OSError as e:
-        console.print(f"[bold red]Error deleting datasets folder {datasets_path}: {e}[/bold red]")
-    except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred during datasets folder deletion: {e}[/bold red]")
 
 def start_server():
     """Starts the server and listens for incoming connections."""
