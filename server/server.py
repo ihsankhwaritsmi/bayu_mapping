@@ -170,6 +170,43 @@ def handle_client(conn, addr):
         conn.close()
         console.print(f"Connection with {addr} closed.")
 
+def execute_odm_mapping(flag_files_to_delete):
+    """Executes the ODM mapping script in a separate thread/process."""
+    console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
+    try:
+        process = subprocess.Popen(
+            [MAPPING_SCRIPT_PATH],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+
+        for line in process.stdout:
+            console.print(f"[blue]SCRIPT OUT:[/blue] {line.strip()}")
+        for line in process.stderr:
+            console.print(f"[red]SCRIPT ERR:[/red] {line.strip()}")
+
+        process.wait()
+
+        if process.returncode == 0:
+            console.print("[bold green]Mapping script executed successfully![/bold green]")
+        else:
+            console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
+
+    except FileNotFoundError:
+        console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
+    except Exception as e:
+        console.print(f"[bold red]An unexpected error occurred while running the mapping script: {e}[/bold red]")
+    finally:
+        # Delete the flag files after the script has finished (regardless of success or failure)
+        for flag_file in flag_files_to_delete:
+            try:
+                os.remove(flag_file)
+                console.print(f"Deleted flag file: {flag_file}")
+            except OSError as e:
+                console.print(f"Error deleting flag file {flag_file}: {e}")
+
 def monitor_flag_files():
     """Continuously monitors the UPLOAD_DIR for flag files."""
     flag_detected = False
@@ -178,46 +215,23 @@ def monitor_flag_files():
         if flag_files and not flag_detected:
             console.print("[bold green]Ready to make an orthophoto[/bold green]")
             flag_detected = True
-            # Execute the mapping script
-            console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
-            try:
-                # Use subprocess.run to execute the shell script
-                # Use subprocess.Popen to stream output in real-time
-                process = subprocess.Popen(
-                    [MAPPING_SCRIPT_PATH],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True, # Decode stdout/stderr as text
-                    bufsize=1 # Line-buffered output
-                )
-
-                # Stream stdout
-                for line in process.stdout:
-                    console.print(f"[blue]SCRIPT OUT:[/blue] {line.strip()}")
-                # Stream stderr
-                for line in process.stderr:
-                    console.print(f"[red]SCRIPT ERR:[/red] {line.strip()}")
-
-                # Wait for the process to complete and get the return code
-                process.wait()
-
-                if process.returncode == 0:
-                    console.print("[bold green]Mapping script executed successfully![/bold green]")
-                else:
-                    console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
-
-            except FileNotFoundError:
-                console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
-            except Exception as e:
-                console.print(f"[bold red]An unexpected error occurred while running the mapping script: {e}[/bold red]")
-
-            # Delete the flag files after attempting to run the script
+            
+            # Delete the flag files immediately to allow new ones to be detected
+            # while ODM is running in the background.
+            # We pass the list of files to the ODM execution thread for later deletion.
+            flag_files_to_process = list(flag_files) # Create a copy for the new thread
             for flag_file in flag_files:
                 try:
                     os.remove(flag_file)
-                    console.print(f"Deleted flag file: {flag_file}")
+                    console.print(f"Deleted flag file: {flag_file} (pre-ODM execution)")
                 except OSError as e:
-                    console.print(f"Error deleting flag file {flag_file}: {e}")
+                    console.print(f"Error deleting flag file {flag_file} (pre-ODM execution): {e}")
+
+            # Start ODM execution in a new thread
+            odm_thread = threading.Thread(target=execute_odm_mapping, args=(flag_files_to_process,), daemon=True)
+            odm_thread.start()
+            console.print("[bold yellow]ODM mapping started in a separate thread.[/bold yellow]")
+
         elif not flag_files and flag_detected:
             flag_detected = False # Reset if flag files are removed
         time.sleep(1) # Prevent busy-waiting
