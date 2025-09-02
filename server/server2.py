@@ -159,10 +159,18 @@ def handle_client(conn, addr):
             message_len = int.from_bytes(message_len_bytes, 'big')
             status_message_bytes = conn.recv(message_len)
             status_message = json.loads(status_message_bytes.decode('utf-8'))
+            
+            client_program_status = status_message.get('client_program', 'unknown')
+            mavlink_status = status_message.get('mavlink', 'unknown')
+            gopro_status = status_message.get('gopro', 'unknown')
+
+            mavlink_color = "green" if mavlink_status == "connected" else "red"
+            gopro_color = "green" if gopro_status == "connected" else "red"
+
             console.print(f"Received status from {addr}:\n"
-                          f"  [bold blue]Client Program: {status_message.get('client_program')}[/bold blue]\n"
-                          f"  [bold blue]Mavlink: {status_message.get('mavlink')}[/bold blue]\n"
-                          f"  [bold blue]GoPro: {status_message.get('gopro')}[/bold blue]")
+                          f"  [bold blue]Client Program: {client_program_status}[/bold blue]\n"
+                          f"  [bold {mavlink_color}]Mavlink: {mavlink_status}[/bold {mavlink_color}]\n"
+                          f"  [bold {gopro_color}]GoPro: {gopro_status}[/bold {gopro_color}]")
             # Optionally send a response back to the client
             conn.sendall(b"Status received.")
 
