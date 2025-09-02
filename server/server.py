@@ -4,60 +4,49 @@ import os
 import datetime
 import glob
 import time
-import subprocess
-import shutil
-import json
+import subprocess # Import the subprocess module
+import shutil # Import shutil for directory operations
 from rich.console import Console
-from flask import Flask, render_template_string, send_from_directory, abort, redirect, url_for
+from flask import Flask, render_template_string, send_from_directory, abort, request, redirect, url_for
 from werkzeug.utils import secure_filename
 
-# --- CONFIGURATION ---
-# Network settings
-HOST = '0.0.0.0'  # Listen on all available interfaces for compatibility
-PORT = 65432      # Port for the main socket server
-FLASK_PORT = 5000 # Port for the Flask web server
+HOST = '0.0.0.0'  # Listen on all available interfaces for AWS compatibility
+PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
+FLASK_PORT = 5000   # Port for the Flask web server
 
-# Protocol message types (client must send one of these first)
-MESSAGE_TYPE_STATUS = "status_check"
-MESSAGE_TYPE_FILE = "file_upload"
-
-# Directory settings
+# Get the directory where the script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BROWSE_BASE_DIR = os.path.join(SCRIPT_DIR, 'datasets')
-UPLOAD_DIR = os.path.join(BROWSE_BASE_DIR, 'project', 'images') # Files are uploaded here
+UPLOAD_DIR = os.path.join(SCRIPT_DIR, 'datasets', 'project', 'images')
+BROWSE_BASE_DIR = os.path.join(SCRIPT_DIR, 'datasets') # New base directory for browsing
 MAPPING_SCRIPT_PATH = os.path.join(SCRIPT_DIR, 'mapping_script.sh')
 
-# --- INITIALIZATION ---
 console = Console()
 app = Flask(__name__)
 
-# --- FLASK WEB SERVER ---
-
-# Inline HTML template for the file browser
+# Inline HTML template for directory listing
 DIR_LISTING_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>File Browser - {{ current_path }}</title>
+    <title>Directory Listing - {{ current_path }}</title>
     <style>
         body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; margin: 20px; }
-        h1 { color: #569cd6; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        h1 { color: #569cd6; }
         a { color: #9cdcfe; text-decoration: none; }
         a:hover { text-decoration: underline; }
         ul { list-style-type: none; padding: 0; }
-        li { margin-bottom: 8px; padding: 5px; border-radius: 3px; }
-        li:hover { background-color: #2a2d2e; }
-        .dir { color: #ce9178; font-weight: bold; }
+        li { margin-bottom: 5px; }
+        .dir { color: #ce9178; }
         .file { color: #d4d4d4; }
-        .parent-link { margin-bottom: 20px; display: block; font-size: 1.1em;}
+        .parent-link { margin-bottom: 10px; display: block; }
     </style>
 </head>
 <body>
-    <h1>File Browser: {{ current_path }}</h1>
+    <h1>Directory Listing for: {{ current_path }}</h1>
     {% if parent_path %}
-        <a href="{{ parent_path }}" class="parent-link"> &larr; Parent Directory</a>
+        <a href="{{ parent_path }}" class="parent-link">.. (Parent Directory)</a>
     {% endif %}
     <ul>
         {% for item in items %}
@@ -78,29 +67,32 @@ DIR_LISTING_TEMPLATE = """
 @app.route('/browse/<path:subpath>')
 def browse_directory(subpath):
     base_dir = BROWSE_BASE_DIR
-    # Sanitize and normalize the path
+    # Normalize subpath to use forward slashes for consistency
     normalized_subpath = subpath.replace('\\', '/')
     abs_path = os.path.join(base_dir, normalized_subpath)
-
-    # Prevent directory traversal attacks
+    
+    # Sanitize path to prevent directory traversal
     if not os.path.abspath(abs_path).startswith(os.path.abspath(base_dir)):
         abort(404)
 
     if not os.path.exists(abs_path):
         abort(404)
 
-    # If the path is a file, redirect to download it
     if os.path.isfile(abs_path):
-        relative_filepath = os.path.relpath(abs_path, base_dir).replace('\\', '/')
+        # If it's a file, redirect to download it
+        relative_filepath = os.path.relpath(abs_path, BROWSE_BASE_DIR).replace('\\', '/')
         return redirect(url_for('download_file', filename=relative_filepath))
 
     items = []
     try:
         for item_name in os.listdir(abs_path):
             item_path = os.path.join(abs_path, item_name)
-            relative_item_path = os.path.relpath(item_path, base_dir).replace('\\', '/')
-            item_type = 'dir' if os.path.isdir(item_path) else 'file'
-            items.append({'name': item_name, 'type': item_type, 'path': relative_item_path})
+            relative_item_path = os.path.relpath(item_path, BROWSE_BASE_DIR).replace('\\', '/') # Normalize to forward slashes
+            
+            if os.path.isdir(item_path):
+                items.append({'name': item_name, 'type': 'dir', 'path': relative_item_path})
+            else:
+                items.append({'name': item_name, 'type': 'file', 'path': relative_item_path})
     except PermissionError:
         console.print(f"[bold red]Permission denied to access {abs_path}[/bold red]")
         abort(403) # Forbidden
@@ -108,223 +100,183 @@ def browse_directory(subpath):
     # Sort items: directories first, then files, both alphabetically
     items.sort(key=lambda x: (x['type'] == 'file', x['name'].lower()))
 
-    current_path_display = '/' + normalized_subpath if normalized_subpath else '/'
+    current_path_display = os.path.relpath(abs_path, BROWSE_BASE_DIR).replace('\\', '/') if abs_path != BROWSE_BASE_DIR else '/'
     
     parent_path = None
-    if os.path.abspath(abs_path) != os.path.abspath(base_dir):
+    if abs_path != BROWSE_BASE_DIR:
         parent_abs_path = os.path.dirname(abs_path)
-        relative_parent_path = os.path.relpath(parent_abs_path, base_dir).replace('\\', '/')
-        # Handle the case where the parent is the base directory
-        if relative_parent_path == '.':
+        relative_parent_path = os.path.relpath(parent_abs_path, BROWSE_BASE_DIR).replace('\\', '/')
+        if relative_parent_path == '.': # This means the parent is BROWSE_BASE_DIR itself
             parent_path = url_for('browse_directory', subpath='')
         else:
             parent_path = url_for('browse_directory', subpath=relative_parent_path)
 
-    return render_template_string(DIR_LISTING_TEMPLATE,
-                                  current_path=current_path_display,
+    return render_template_string(DIR_LISTING_TEMPLATE, 
+                                  current_path=current_path_display, 
                                   items=items,
                                   parent_path=parent_path)
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    # Sanitize and normalize the filename path
+    # The filename is expected to be a relative path from BROWSE_BASE_DIR, already sanitized by browse_directory
+    # Ensure the path does not attempt directory traversal
+    # Normalize filename to use forward slashes for consistency
     normalized_filename = filename.replace('\\', '/')
     abs_filepath = os.path.join(BROWSE_BASE_DIR, normalized_filename)
     if not os.path.abspath(abs_filepath).startswith(os.path.abspath(BROWSE_BASE_DIR)):
         abort(404)
-
+    
+    # The filename is already the relative path from BROWSE_BASE_DIR.
+    # send_from_directory expects the base directory and the relative path to the file.
     try:
         return send_from_directory(BROWSE_BASE_DIR, normalized_filename, as_attachment=True)
     except FileNotFoundError:
         abort(404)
 
-def run_flask_app():
-    """Runs the Flask application in the background."""
-    console.print(f"Flask server starting on http://{HOST}:{FLASK_PORT}/browse/")
-    # Set use_reloader=False because it causes issues in a threaded environment
-    app.run(host=HOST, port=FLASK_PORT, debug=False, use_reloader=False)
-
-
-# --- SOCKET SERVER & CLIENT HANDLING ---
-
 def handle_client(conn, addr):
-    """
-    Handles an individual client connection.
-    This function implements the server's communication protocol.
-    """
+    """Handles an individual client connection."""
     console.print(f"Connected by {addr}")
-    conn.settimeout(20) # Set a timeout for client operations
-    
+    conn.settimeout(10) # Set a timeout for client connection operations
     try:
-        # --- PROTOCOL STEP 1: RECEIVE MESSAGE TYPE ---
-        # The client MUST first send the length of the message type, then the type itself.
-        message_type_len_bytes = conn.recv(4)
-        if not message_type_len_bytes:
-            console.print(f"Client {addr} disconnected before sending message type length.")
+        # Receive file extension first
+        file_ext_len_bytes = conn.recv(4)
+        if not file_ext_len_bytes:
+            console.print(f"Client {addr} disconnected before sending extension length.")
             return
-        message_type_len = int.from_bytes(message_type_len_bytes, 'big')
-        message_type = conn.recv(message_type_len).decode('utf-8')
+        file_ext_len = int.from_bytes(file_ext_len_bytes, 'big')
+        file_ext = conn.recv(file_ext_len).decode('utf-8')
 
-        # --- PROTOCOL STEP 2: PROCESS BASED ON MESSAGE TYPE ---
-        if message_type == MESSAGE_TYPE_STATUS:
-            # Handle status message
-            message_len_bytes = conn.recv(4)
-            if not message_len_bytes: return
-            message_len = int.from_bytes(message_len_bytes, 'big')
-            status_message_bytes = conn.recv(message_len)
-            status_message = json.loads(status_message_bytes.decode('utf-8'))
-            
-            mavlink_status = status_message.get('mavlink', 'unknown')
-            gopro_status = status_message.get('gopro', 'unknown')
-            mavlink_color = "green" if mavlink_status == "connected" else "red"
-            gopro_color = "green" if gopro_status == "connected" else "red"
+        if not file_ext:
+            console.print(f"Client {addr} disconnected or sent empty extension.")
+            return
 
-            console.print(f"Received status from {addr}: "
-                          f"[bold {mavlink_color}]Mavlink: {mavlink_status}[/bold {mavlink_color}], "
-                          f"[bold {gopro_color}]GoPro: {gopro_status}[/bold {gopro_color}]")
-            conn.sendall(b"Status received.")
+        # Create a unique filename and save the file
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"image_{timestamp}.{file_ext}"
+        filepath = os.path.join(UPLOAD_DIR, filename)
 
-        elif message_type == MESSAGE_TYPE_FILE:
-            # Handle file upload (including .flag files)
-            file_ext_len_bytes = conn.recv(4)
-            if not file_ext_len_bytes: return
-            file_ext_len = int.from_bytes(file_ext_len_bytes, 'big')
-            file_ext = conn.recv(file_ext_len).decode('utf-8').lstrip('.') # Sanitize extension
-
-            if not file_ext:
-                console.print(f"Client {addr} sent an empty file extension.")
-                return
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            filename = f"received_{timestamp}.{file_ext}"
-            filepath = os.path.join(UPLOAD_DIR, filename)
-
-            with open(filepath, 'wb') as f:
-                while True:
-                    data = conn.recv(4096)
-                    if not data:
-                        break
-                    f.write(data)
-            console.print(f"Received and saved [cyan]{filename}[/cyan] from {addr}")
-            conn.sendall(b"File received.")
-            
-        else:
-            console.print(f"[bold red]Received unknown message type '{message_type}' from {addr}.[/bold red]")
-
+        with open(filepath, 'wb') as f:
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    break
+                f.write(data)
+        console.print(f"Received and saved {filename} from {addr}")
     except ConnectionResetError:
         console.print(f"Client {addr} forcefully closed the connection.")
-    except socket.timeout:
-        console.print(f"Socket timeout with client {addr}.")
-    except json.JSONDecodeError:
-        console.print(f"[bold red]Error decoding JSON from client {addr}.[/bold red]")
     except Exception as e:
-        console.print(f"[bold red]Error handling client {addr}: {e}[/bold red]")
+        console.print(f"Error handling client {addr}: {e}")
     finally:
         conn.close()
         console.print(f"Connection with {addr} closed.")
 
-
-# --- BACKGROUND TASK: FLAG FILE MONITOR ---
-
 def monitor_flag_files():
-    """Continuously monitors the UPLOAD_DIR for '.flag' files to trigger the mapping script."""
-    console.print("Flag file monitor started.")
+    """Continuously monitors the UPLOAD_DIR for flag files."""
+    flag_detected = False
     while True:
-        try:
-            flag_files = glob.glob(os.path.join(UPLOAD_DIR, '*.flag'))
-            if flag_files:
-                console.print("[bold green]Flag file detected! Ready to start orthophoto generation.[/bold green]")
-                
-                # Execute the mapping script
-                console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH} with UPLOAD_DIR={UPLOAD_DIR}")
+        flag_files = glob.glob(os.path.join(UPLOAD_DIR, '*.flag'))
+        if flag_files and not flag_detected:
+            console.print("[bold green]Ready to make an orthophoto[/bold green]")
+            flag_detected = True
+            # Execute the mapping script
+            console.print(f"Executing mapping script: {MAPPING_SCRIPT_PATH}")
+            try:
+                # Use subprocess.run to execute the shell script
+                # Use subprocess.Popen to stream output in real-time
+                process = subprocess.Popen(
+                    [MAPPING_SCRIPT_PATH],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True, # Decode stdout/stderr as text
+                    bufsize=1 # Line-buffered output
+                )
+
+                # Stream stdout
+                for line in process.stdout:
+                    console.print(f"[blue]SCRIPT OUT:[/blue] {line.strip()}")
+                # Stream stderr
+                for line in process.stderr:
+                    console.print(f"[red]SCRIPT ERR:[/red] {line.strip()}")
+
+                # Wait for the process to complete and get the return code
+                process.wait()
+
+                if process.returncode == 0:
+                    console.print("[bold green]Mapping script executed successfully![/bold green]")
+                else:
+                    console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
+
+            except FileNotFoundError:
+                console.print(f"[bold red]Mapping script not found at {MAPPING_SCRIPT_PATH}. Make sure it's executable.[/bold red]")
+            except Exception as e:
+                console.print(f"[bold red]An unexpected error occurred while running the mapping script: {e}[/bold red]")
+
+            # Delete the flag files after attempting to run the script
+            for flag_file in flag_files:
                 try:
-                    # Ensure the mapping script is executable
-                    if not os.access(MAPPING_SCRIPT_PATH, os.X_OK):
-                        console.print(f"[bold red]Error: Mapping script {MAPPING_SCRIPT_PATH} is not executable. Attempting to make it executable.[/bold red]")
-                        os.chmod(MAPPING_SCRIPT_PATH, 0o755) # Make it executable for owner, group, others
+                    os.remove(flag_file)
+                    console.print(f"Deleted flag file: {flag_file}")
+                except OSError as e:
+                    console.print(f"Error deleting flag file {flag_file}: {e}")
+        elif not flag_files and flag_detected:
+            flag_detected = False # Reset if flag files are removed
+        time.sleep(1) # Prevent busy-waiting
 
-                    # Use Popen to stream stdout/stderr in real-time, passing UPLOAD_DIR as an argument
-                    process = subprocess.Popen(
-                        [MAPPING_SCRIPT_PATH, UPLOAD_DIR], # Pass UPLOAD_DIR as an argument
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        bufsize=1,
-                        universal_newlines=True
-                    )
+def start_server():
+    """Starts the server and listens for incoming connections."""
+    # Start the flag monitoring thread
+    flag_monitor_thread = threading.Thread(target=monitor_flag_files, daemon=True)
+    flag_monitor_thread.start()
+    console.print("Flag file monitor started.")
 
-                    # Stream stdout and stderr from the script
-                    for line in process.stdout:
-                        console.print(f"[blue]SCRIPT OUT:[/] {line.strip()}")
-                    for line in process.stderr:
-                        console.print(f"[red]SCRIPT ERR:[/] {line.strip()}")
-                    
-                    process.wait() # Wait for the script to finish
-
-                    if process.returncode == 0:
-                        console.print("[bold green]Mapping script executed successfully![/bold green]")
-                    else:
-                        console.print(f"[bold red]Mapping script exited with error code: {process.returncode}[/bold red]")
-
-                except FileNotFoundError:
-                    console.print(f"[bold red]Error: Mapping script not found at {MAPPING_SCRIPT_PATH}. Ensure the file exists and is executable (`chmod +x mapping_script.sh`).[/bold red]")
-                except Exception as e:
-                    console.print(f"[bold red]An unexpected error occurred while running the mapping script: {e}[/bold red]")
-                
-                # Clean up flag files after processing
-                for flag_file in flag_files:
-                    try:
-                        os.remove(flag_file)
-                        console.print(f"Deleted flag file: {os.path.basename(flag_file)}")
-                    except OSError as e:
-                        console.print(f"[bold red]Error deleting flag file {flag_file}: {e}[/bold red]")
-            
-            time.sleep(2) # Check for flag files every 2 seconds
-        except Exception as e:
-            console.print(f"[bold red]Error in flag monitor loop: {e}[/bold red]")
-            time.sleep(5) # Wait a bit longer if there's a recurring error
-
-
-# --- MAIN SERVER LOGIC ---
-
-def start_socket_server():
-    """Starts the main socket server to listen for incoming client connections."""
+    # The 'with' statement ensures the socket is properly closed
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # Optional: allows reuse of address
         s.bind((HOST, PORT))
         s.listen()
-        s.settimeout(1.0) # Use a timeout to allow graceful shutdown with Ctrl+C
-        console.print(f"[bold]Server listening on {HOST}:{PORT}[/bold]")
+        s.settimeout(1) # Set a timeout for accept to allow KeyboardInterrupt to be caught
+        console.print(f"Server listening on {HOST}:{PORT}")
         console.print("Press Ctrl+C to stop the server.")
 
-        while True:
-            try:
-                conn, addr = s.accept()
-                # Create a new thread for each client to handle them concurrently
-                thread = threading.Thread(target=handle_client, args=(conn, addr))
-                thread.daemon = True # Allows main program to exit even if threads are running
-                thread.start()
-            except socket.timeout:
-                continue # Go back to the start of the loop and wait for a connection
-            except KeyboardInterrupt:
-                console.print("\nShutting down server...")
-                break
+        try:
+            while True:
+                try:
+                    conn, addr = s.accept()
+                    thread = threading.Thread(target=handle_client, args=(conn, addr))
+                    # Set as a daemon thread so it exits when the main program does
+                    thread.daemon = True
+                    thread.start()
+                except socket.timeout:
+                    pass # Timeout occurred, continue listening
+        except KeyboardInterrupt:
+            console.print("\nShutting down server...")
+        finally:
+            console.print("Server has been closed.")
+
+def run_flask_app():
+    """Runs the Flask application."""
+    console.print(f"Flask server starting on http://{HOST}:{FLASK_PORT}/browse/")
+    app.run(host=HOST, port=FLASK_PORT, debug=True, use_reloader=False) # Set debug to True for more detailed error messages
+
+@app.errorhandler(500)
+def internal_error(error):
+    console.print(f"[bold red]Flask Internal Server Error: {error}[/bold red]")
+    import traceback
+    console.print(f"[bold red]Traceback: {traceback.format_exc()}[/bold red]")
+    return "Internal Server Error", 500
 
 if __name__ == '__main__':
-    # Ensure necessary directories exist before starting
+    # Ensure UPLOAD_DIR and BROWSE_BASE_DIR exist
     if not os.path.exists(UPLOAD_DIR):
         os.makedirs(UPLOAD_DIR)
         console.print(f"Created upload directory: {UPLOAD_DIR}")
     
-    # Start the Flask web server in a background thread
+    if not os.path.exists(BROWSE_BASE_DIR):
+        os.makedirs(BROWSE_BASE_DIR)
+        console.print(f"Created browse base directory: {BROWSE_BASE_DIR}")
+
+    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
     flask_thread.start()
     
-    # Start the flag file monitor in a background thread
-    flag_monitor_thread = threading.Thread(target=monitor_flag_files, daemon=True)
-    flag_monitor_thread.start()
-    
-    # Start the main socket server in the main thread
-    start_socket_server()
-    
-    console.print("Server has been closed.")
+    start_server()
