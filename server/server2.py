@@ -12,13 +12,13 @@ console = Console() # Initialize rich console
 
 def handle_client(conn, addr):
     """Handle a single client connection, receiving and processing status messages."""
-    console.print(f"[bold green]Connected by {addr}[/bold green]")
+    console.print(f"\n[bold green]Client connected from {addr}[/bold green]")
     conn.settimeout(10) # Set a timeout for client connection operations
     try:
         # First, read the message type length
         message_type_len_bytes = conn.recv(4)
         if not message_type_len_bytes:
-            console.print(f"[yellow]Client {addr} disconnected unexpectedly.[/yellow]")
+            console.print(f"[bold red]Client {addr} disconnected unexpectedly.[/bold red]")
             return
         message_type_len = int.from_bytes(message_type_len_bytes, 'big')
 
@@ -29,7 +29,7 @@ def handle_client(conn, addr):
             # Read the length of the JSON status message
             status_len_bytes = conn.recv(4)
             if not status_len_bytes:
-                console.print(f"[yellow]Client {addr} disconnected while reading status length.[/yellow]")
+                console.print(f"[bold red]Client {addr} disconnected while reading status length.[/bold red]")
                 return
             status_len = int.from_bytes(status_len_bytes, 'big')
 
@@ -38,24 +38,24 @@ def handle_client(conn, addr):
             while len(full_message) < status_len:
                 packet = conn.recv(status_len - len(full_message))
                 if not packet:
-                    console.print(f"[yellow]Client {addr} disconnected while reading status message.[/yellow]")
+                    console.print(f"[bold red]Client {addr} disconnected while reading status message.[/bold red]")
                     return
                 full_message += packet
             
             status_data = json.loads(full_message.decode('utf-8'))
-            console.print(f"[bold blue]Received status from {addr}:[/bold blue] {status_data}")
+            console.print(f"[bold blue]Received status from {addr}:[/bold blue]\n{json.dumps(status_data, indent=2)}")
         else:
             console.print(f"[bold red]Received unknown message type '{message_type}' from {addr}[/bold red]")
 
     except ConnectionResetError:
-        console.print(f"[yellow]Client {addr} forcibly closed the connection.[/yellow]")
+        console.print(f"[bold red]Client {addr} forcibly closed the connection.[/bold red]")
     except json.JSONDecodeError:
-        console.print(f"[bold red]Error decoding JSON from {addr}.[/bold red]")
+        console.print(f"[bold red]Error decoding JSON from {addr}. Ensure valid JSON is sent.[/bold red]")
     except Exception as e:
         console.print(f"[bold red]Error handling client {addr}: {e}[/bold red]")
     finally:
         conn.close()
-        console.print(f"[bold green]Connection with {addr} closed.[/bold green]")
+        console.print(f"[bold red]Connection with {addr} closed.[/bold red]\n")
 
 def start_server():
     """Starts the status message server and listens for incoming connections."""
